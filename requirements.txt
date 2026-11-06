@@ -1,0 +1,8 @@
+# nodl 核心功能 **零依赖**：只用 Python 3.8+ 标准库，不需要 pip install。
+#
+# 可选增强（只有想用真实浏览器绕过平台的人机校验时才需要）：
+#
+#   pip install playwright
+#   playwright install chromium
+#
+# 详见 README「三种运行模式」。

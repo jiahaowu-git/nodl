@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本地无水印下载器 · 抖音 / TikTok</title>
+<style>
+  :root{
+    --blue:#1a9cf0; --blue-d:#0b86d4; --ink:#111827; --muted:#6b7280;
+    --line:#e5e7eb; --bg:#f7f8fa; --card:#fff; --ok:#16a34a; --err:#dc2626;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
+  header{background:#fff;border-bottom:1px solid var(--line);padding:14px 0;position:sticky;top:0;z-index:10}
+  .wrap{max-width:880px;margin:0 auto;padding:0 20px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:19px}
+  .brand b{color:var(--blue)}
+  .sub{color:var(--muted);font-size:12px;font-weight:400;margin-left:4px}
+  main{padding:34px 0 80px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  input[type=text]{flex:1;min-width:260px;padding:13px 15px;border:1px solid var(--line);border-radius:9px;font-size:15px;outline:none;transition:border-color .15s,box-shadow .15s}
+  input[type=text]:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(26,156,240,.14)}
+  button{cursor:pointer;font-family:inherit;font-size:15px;border:none;border-radius:9px;padding:13px 22px;background:var(--blue);color:#fff;font-weight:600;transition:background .15s,transform .05s}
+  button:hover{background:var(--blue-d)}
+  button:active{transform:translateY(1px)}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  select{padding:13px 12px;border:1px solid var(--line);border-radius:9px;font-size:14px;background:#fff;color:var(--ink);font-family:inherit;outline:none;cursor:pointer}
+  select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(26,156,240,.14)}
+  button.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+  button.ghost:hover{background:#f3f4f6}
+  .hint{color:var(--muted);font-size:13px;margin-top:10px}
+  #status{margin-top:16px;font-size:14px;min-height:22px}
+  #status.err{color:var(--err)}
+  #status.ok{color:var(--ok)}
+  #status.busy{color:var(--blue)}
+  .result{margin-top:26px;display:none}
+  .result.show{display:block}
+  .vid{display:flex;gap:18px;flex-wrap:wrap}
+  .thumb{width:190px;border-radius:10px;overflow:hidden;background:#0f172a;flex:0 0 auto}
+  .thumb img{width:100%;display:block}
+  .meta{flex:1;min-width:240px}
+  .meta h2{font-size:17px;margin:0 0 6px;line-height:1.45}
+  .tags{color:var(--muted);font-size:13px;display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+  .tag{background:#f1f5f9;border-radius:20px;padding:2px 10px;font-size:12px}
+  .btns{margin-top:18px;display:flex;gap:10px;flex-wrap:wrap}
+  .dl{background:var(--blue);color:#fff;text-decoration:none;padding:12px 20px;border-radius:9px;font-weight:600;font-size:14px;display:inline-flex;align-items:center;gap:7px;transition:background .15s}
+  .dl:hover{background:var(--blue-d)}
+  .dl.mp3{background:#7c3aed}
+  .dl.mp3:hover{background:#6d28d9}
+  .dl .sz{font-weight:400;opacity:.85;font-size:12px}
+  details{margin-top:22px;border-top:1px solid var(--line);padding-top:14px}
+  summary{cursor:pointer;color:var(--muted);font-size:13px;outline:none}
+  pre{background:#0f172a;color:#cbd5e1;padding:14px;border-radius:9px;overflow:auto;font-size:12px;line-height:1.5;max-height:340px}
+  .tip{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:10px;padding:14px 16px;font-size:13.5px;margin-top:22px}
+  .tip b{display:block;margin-bottom:4px}
+  footer{color:var(--muted);font-size:12px;text-align:center;padding:24px 0 40px}
+  code{background:#f1f5f9;padding:1px 6px;border-radius:5px;font-size:12.5px}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap brand">
+    <b>NODL</b> 本地无水印下载器
+    <span class="sub">抖音 / TikTok · 纯本地运行</span>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="card">
+    <div class="row">
+      <input id="url" type="text" placeholder="在此粘贴抖音 / TikTok 链接，例如 https://v.douyin.com/xxxxxxx/" autocomplete="off" spellcheck="false">
+      <select id="source" title="解析源">
+        <option value="auto">自动解析</option>
+        <option value="first-party">仅官方接口</option>
+        <option value="tikwm">公共接口 A</option>
+        <option value="ajaxsearch">公共接口 B</option>
+      </select>
+      <button id="go">下载</button>
+    </div>
+    <div class="hint">支持分享短链、分享文案、完整作品链接。「自动解析」会先走官方接口，失败再自动切换公共接口。</div>
+    <div id="status"></div>
+
+    <div class="result" id="result">
+      <div class="vid">
+        <div class="thumb" id="thumbWrap" style="display:none"><img id="thumb" alt=""></div>
+        <div class="meta">
+          <div class="tags" id="tags"></div>
+          <h2 id="title"></h2>
+          <div class="btns" id="btns"></div>
+        </div>
+      </div>
+      <details>
+        <summary>查看原始解析数据（JSON）</summary>
+        <pre id="raw"></pre>
+      </details>
+    </div>
+  </div>
+
+  <div class="tip">
+    <b>为什么本地解析有时会提示需要登录态？</b>
+    抖音 / TikTok 的 Web 端详情接口现在带 <code>Argus</code> 签名 + 验证码网关，匿名请求会被拦。
+    解决办法二选一：
+    <br>① 启动时带上你自己的 Cookie：<code>python -m nodl serve --cookie-file cookie.txt</code>
+    （在浏览器 F12 → Application → Cookies 里复制 <code>ttwid</code> / <code>msToken</code> / <code>sessionid</code> 即可）
+    <br>② 装 Playwright，用真实浏览器去解析：<code>pip install playwright &amp;&amp; playwright install chromium</code>，然后 <code>--browser</code>
+  </div>
+</main>
+
+<footer>本地运行 · 不上传任何链接 · 仅供备份自己的作品 / 已获授权的素材使用</footer>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const status = (msg, cls) => { const el = $('#status'); el.textContent = msg; el.className = cls || ''; };
+
+$('#url').addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+$('#go').addEventListener('click', run);
+
+async function run() {
+  const url = $('#url').value.trim();
+  if (!url) { status('请先粘贴链接', 'err'); return; }
+  $('#go').disabled = true;
+  status('解析中，请稍候…', 'busy');
+  $('#result').classList.remove('show');
+  try {
+    const res = await fetch('/api/resolve', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url, source: $('#source').value})
+    });
+    const data = await res.json();
+    if (!data.ok) { status('解析失败：' + (data.error || '未知错误'), 'err'); return; }
+    render(data);
+    status('解析完成，点击按钮下载', 'ok');
+  } catch (e) {
+    status('请求失败：' + e.message, 'err');
+  } finally {
+    $('#go').disabled = false;
+  }
+}
+
+function render(d) {
+  $('#title').textContent = d.title || '(无标题)';
+  $('#raw').textContent = JSON.stringify(d, null, 2);
+
+  const tags = [];
+  if (d.platform) tags.push('<span class="tag">' + d.platform + '</span>');
+  if (d.author) tags.push('<span class="tag">@' + d.author + '</span>');
+  if (d.duration) tags.push('<span class="tag">' + d.duration + 's</span>');
+  if (d.strategy) tags.push('<span class="tag">' + d.strategy + '</span>');
+  $('#tags').innerHTML = tags.join('');
+
+  if (d.cover) {
+    const ref = (d.videos && d.videos[0] && d.videos[0].referer) || '';
+    $('#thumbWrap').style.display = 'block';
+    $('#thumb').src = '/api/proxy?' + new URLSearchParams({u: d.cover, r: ref}).toString();
+  }
+  else { $('#thumbWrap').style.display = 'none'; }
+
+  const box = $('#btns');
+  box.innerHTML = '';
+  const add = (m, cls) => {
+    const a = document.createElement('a');
+    a.className = 'dl ' + (cls || '');
+    const q = new URLSearchParams({u: m.url, n: (m.label || 'file').replace(/[^\w.\-]+/g, '_') + '.' + (m.ext || 'mp4'), r: m.referer || ''});
+    a.href = '/api/download?' + q.toString();
+    a.textContent = '⬇ ' + m.label + (m.quality ? ' · ' + m.quality : '');
+    if (m.size) { const s = document.createElement('span'); s.className = 'sz'; s.textContent = (m.size/1048576).toFixed(1) + 'MB'; a.appendChild(s); }
+    box.appendChild(a);
+  };
+  (d.videos || []).forEach((m, i) => add(m, i === 0 ? 'hd' : ''));
+  (d.audios || []).forEach((m) => add(m, 'mp3'));
+  (d.images || []).forEach((m) => add(m, ''));
+  if (!box.children.length) box.innerHTML = '<span class="hint">没有可下载的直链</span>';
+
+  $('#result').classList.add('show');
+}
+</script>
+</body>
+</html>
