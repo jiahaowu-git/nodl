@@ -44,8 +44,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         self.end_headers()
         self.wfile.write(body)
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _send_html(self, path: str) -> None:
         try:
@@ -76,7 +87,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path != "/api/resolve":
+        if parsed.path not in ("/api/resolve", "/api/ingest"):
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length") or 0)
@@ -85,6 +96,9 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(raw.decode("utf-8"))
         except Exception:
             self._send_json({"ok": False, "error": "请求体不是合法 JSON"}, 400)
+            return
+        if parsed.path == "/api/ingest":
+            self._ingest(payload)
             return
         url = (payload.get("url") or "").strip()
         if not url:
@@ -103,6 +117,36 @@ class Handler(BaseHTTPRequestHandler):
         data = res.to_dict()
         data["ok"] = True
         self._send_json(data)
+
+    def _ingest(self, payload: Dict[str, Any]) -> None:
+        """Accept a media url captured by the user (bookmarklet / DevTools)."""
+        url = (payload.get("url") or "").strip()
+        if not url:
+            self._send_json({"ok": False, "error": "缺少 url"}, 400)
+            return
+        candidates = payload.get("candidates") or []
+        if isinstance(candidates, list):
+            candidates = [c for c in candidates if isinstance(c, str)]
+        title = (payload.get("title") or "").strip()
+        try:
+            from .extract import Target
+            from .resolver import Resolver
+            target = Target(platform="direct", url=url, original=url,
+                            page_url=url, share_url=url)
+            res = Resolver()._direct(target)
+            res.title = title or res.title
+            # remember it so a later resolve can reuse it
+            vid = url.split("/")[-1].split("?")[0][:40]
+            try:
+                Resolver().cache.put_url("direct", vid, url, title=res.title)
+            except Exception:
+                pass
+            data = res.to_dict()
+            data["ok"] = True
+            data["candidates"] = candidates
+            self._send_json(data)
+        except Exception as exc:
+            self._send_json({"ok": False, "error": str(exc)}, 200)
 
     def _proxy(self, qs: Dict[str, list]) -> None:
         """Fetch an image (cover) with the Referer the CDN expects."""

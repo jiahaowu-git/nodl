@@ -97,6 +97,21 @@
     </div>
   </div>
 
+  <details class="card" id="manualBox" style="margin-top:18px">
+    <summary style="cursor:pointer;font-weight:600;font-size:14px">🛠 手动导入直链 / 从浏览器捕获（第三方源全挂时用这个）</summary>
+    <div style="margin-top:14px">
+      <div class="row">
+        <input id="manualUrl" type="text" placeholder="粘贴 CDN 直链（.mp4 / .m3u8 / .mp3），或用下面的脚本自动捕获">
+        <button id="manualGo" class="ghost">导入</button>
+      </div>
+      <div class="hint">
+        路径一：浏览器打开作品页 → F12 → Network → 筛 <code>Media</code> 或搜 <code>.mp4</code> → 右键 Copy link address → 粘到这里。<br>
+        路径二：把 <code>snippets/capture.js</code> 的内容贴进 DevTools Console 执行，脚本会自动把直链发到本地服务（需先播放视频）。
+      </div>
+      <div id="manualStatus" class="hint"></div>
+    </div>
+  </details>
+
   <div class="tip">
     <b>为什么本地解析有时会提示需要登录态？</b>
     抖音 / TikTok 的 Web 端详情接口现在带 <code>Argus</code> 签名 + 验证码网关，匿名请求会被拦。
@@ -115,6 +130,26 @@ const status = (msg, cls) => { const el = $('#status'); el.textContent = msg; el
 
 $('#url').addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
 $('#go').addEventListener('click', run);
+$('#manualGo').addEventListener('click', manualImport);
+$('#manualUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') manualImport(); });
+
+async function manualImport() {
+  const url = $('#manualUrl').value.trim();
+  if (!url) { $('#manualStatus').textContent = '请先粘贴直链'; return; }
+  $('#manualStatus').textContent = '导入中…';
+  try {
+    const res = await fetch('/api/ingest', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url, title: '手动导入'})
+    });
+    const data = await res.json();
+    if (!data.ok) { $('#manualStatus').textContent = '导入失败：' + (data.error || '未知错误'); return; }
+    $('#manualStatus').textContent = '导入成功，下面是下载按钮：';
+    render(data);
+  } catch (e) {
+    $('#manualStatus').textContent = '请求失败：' + e.message;
+  }
+}
 
 async function run() {
   const url = $('#url').value.trim();
