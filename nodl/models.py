@@ -40,6 +40,7 @@ class Resolved:
     images: List[MediaLink] = field(default_factory=list)
     source_url: str = ""
     strategy: str = ""
+    uri: str = ""                 # permanent content id (douyin play_addr.uri)
     notes: List[str] = field(default_factory=list)
 
     @property
@@ -60,6 +61,7 @@ class Resolved:
             "cover": self.cover,
             "duration": self.duration,
             "strategy": self.strategy,
+            "uri": self.uri,
             "notes": self.notes,
             "videos": [vars(v) for v in self.videos],
             "audios": [vars(v) for v in self.audios],

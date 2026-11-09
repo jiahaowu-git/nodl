@@ -16,6 +16,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from nodl.douyin import extract_item, play_url_for_uri  # noqa: E402
+from nodl.cache import UriCache, uri_from_play_url  # noqa: E402
 from nodl.providers import decode_jwt_payload  # noqa: E402
 from nodl.extract import find_url, is_direct_media, is_uri  # noqa: E402
 from nodl.jsonutil import find_dict_containing, pick_quality  # noqa: E402
@@ -134,6 +135,23 @@ def offline_tests() -> None:
     check("解出 JWT payload", payload is not None and "url" in payload, str(payload))
     check("坏 JWT 不炸", decode_jwt_payload("not.a.jwt") is None)
 
+    print("\n[离线] uri 缓存（第三方源全挂时的救命稻草）")
+    import tempfile, os as _os
+    tmp = _os.path.join(tempfile.mkdtemp(), "cache.json")
+    c = UriCache(path=tmp)
+    play = ("https://aweme.snssdk.com/aweme/v1/play/?video_id=v1e00fgi0000d6ojganog65rfsorvlkg"
+            "&line=0&ratio=1080")
+    check("从播放接口 URL 里提取 uri",
+          uri_from_play_url(play) == "v1e00fgi0000d6ojganog65rfsorvlkg",
+          str(uri_from_play_url(play)))
+    c.put("douyin", "123456", "v1e00fgi0000d6ojganog65rfsorvlkg", title="t")
+    check("写入并读回 uri", (c.get("douyin", "123456") or {}).get("uri", "").startswith("v1e00"))
+    c.put_url("douyin", "123456", "https://cdn.example/a.mp4")
+    check("保存直链兜底", bool(c.last_urls("douyin", "123456")))
+    check("过期直链不返回", c.last_urls("douyin", "123456", max_age=-1) == [])
+    c2 = UriCache(path=tmp)
+    check("落盘后重载仍在", (c2.get("douyin", "123456") or {}).get("uri", "").startswith("v1e00"))
+
     print("\n[离线] JSON 工具")
     hit = find_dict_containing(TIKTOK_PAYLOAD, ("playAddr",))
     check("递归查找任意层级字段", hit is not None and "playAddr" in hit,
@@ -143,6 +161,21 @@ def offline_tests() -> None:
 
 
 def online_tests() -> None:
+    print("\n[在线] 缓存命中时不再请求第三方")
+    try:
+        import tempfile, os as _os
+        from nodl.cache import UriCache
+        from nodl.resolver import Resolver
+        tmp = _os.path.join(tempfile.mkdtemp(), "cache.json")
+        cache = UriCache(path=tmp)
+        cache.put("douyin", "7661509500746108194", "v1e00fgi0000d6ojganog65rfsorvlkg")
+        res = Resolver(sources="first-party", cache=cache).resolve(
+            "https://www.douyin.com/video/7661509500746108194")
+        check("命中 uri 缓存", res.strategy == "uri-cache", res.strategy)
+        check("缓存路径也能拿到直链", bool(res.best_video() and res.best_video().url.startswith("http")))
+    except Exception as exc:
+        check("缓存链路", False, str(exc))
+
     print("\n[在线] 公共解析源（抖音完整链接 -> 直链）")
     try:
         from nodl.resolver import Resolver

@@ -27,6 +27,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from .cache import uri_from_play_url
 from .httpclient import Client
 from .models import MediaLink, Resolved
 
@@ -110,6 +111,7 @@ def resolve_via_ajaxsearch(client: Client, url: str, referer: str) -> Optional[R
     videos: List[MediaLink] = []
     audios: List[MediaLink] = []
     seen = set()
+    uri = ""
 
     def add(link: MediaLink) -> None:
         if link.url in seen:
@@ -125,7 +127,14 @@ def resolve_via_ajaxsearch(client: Client, url: str, referer: str) -> Optional[R
         upstream = payload.get("url")
         if not upstream:
             continue
-        add(_classify(htmllib.unescape(upstream), payload.get("filename", ""), referer))
+        upstream = htmllib.unescape(upstream)
+        uri = uri or uri_from_play_url(upstream) or ""
+        filename = payload.get("filename", "") or ""
+        link = _classify(upstream, filename, referer)
+        if "-hd" in filename.lower():
+            link.label = "MP4 HD"
+            link.quality = "1080p"
+        add(link)
 
     # 2) raw CDN links present in the markup
     for href in HREF_RE.findall(html):
@@ -145,6 +154,7 @@ def resolve_via_ajaxsearch(client: Client, url: str, referer: str) -> Optional[R
         cover=cover,
         source_url=url,
         strategy="ajaxsearch",
+        uri=uri,
     )
     resolved.videos = videos
     resolved.audios = audios

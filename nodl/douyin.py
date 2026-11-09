@@ -227,6 +227,7 @@ class DouyinResolver:
             duration=info["duration"],
             source_url=target.page_url,
             strategy=strategy,
+            uri=info["uri"],
         )
 
         # 1) the rendition ladder straight from bit_rate[]
