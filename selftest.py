@@ -159,6 +159,69 @@ def offline_tests() -> None:
     ordered = pick_quality([{"bit_rate": 100}, {"bit_rate": 900, "gear_name": "normal_1080_1"}])
     check("清晰度排序", ordered[0]["bit_rate"] == 900)
 
+    print("\n[离线] 手动导入直链（/api/ingest —— 第三方源全挂时的兜底）")
+    ingest_tests()
+
+
+def ingest_tests() -> None:
+    """L3 兜底：本地起一个服务，打一遍 /api/ingest（不联网）。"""
+    import json as _json
+    import tempfile
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    import nodl.cache as cache_mod
+    from nodl.server import Handler
+
+    old_cache_file = cache_mod.CACHE_FILE
+    httpd = None
+    try:
+        # 别把测试数据写进用户真实的 ~/.nodl/uri_cache.json
+        cache_mod.CACHE_FILE = os.path.join(tempfile.mkdtemp(), "uri_cache.json")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        port = httpd.server_address[1]
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        base = "http://127.0.0.1:%d" % port
+
+        body = _json.dumps({
+            "url": "https://v26-cold.douyinvod.com/abc/video/tos/clean.mp4",
+            "title": "手动导入的标题",
+        }).encode("utf-8")
+        req = urllib.request.Request(base + "/api/ingest", data=body,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = _json.loads(r.read().decode("utf-8"))
+            cors = r.headers.get("Access-Control-Allow-Origin")
+        check("ingest 返回 ok", data.get("ok") is True, str(data)[:120])
+        check("ingest 产出视频直链",
+              bool(data.get("videos")) and data["videos"][0]["url"].endswith("clean.mp4"),
+              str(data.get("videos"))[:120])
+        check("ingest 回传标题", data.get("title") == "手动导入的标题", str(data.get("title")))
+        check("ingest 带 CORS 头（跨源可用）", cors == "*", str(cors))
+
+        # 缺 url -> 400
+        req = urllib.request.Request(base + "/api/ingest", data=b"{}",
+                                     headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            check("缺 url 返回 400", False, "居然没报错")
+        except urllib.error.HTTPError as exc:
+            check("缺 url 返回 400", exc.code == 400, str(exc.code))
+
+        # 浏览器发起的跨源预检
+        req = urllib.request.Request(base + "/api/ingest", method="OPTIONS")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            check("OPTIONS 预检返回 204", r.status == 204, str(r.status))
+    except Exception as exc:
+        check("手动导入链路", False, str(exc))
+    finally:
+        cache_mod.CACHE_FILE = old_cache_file
+        if httpd is not None:
+            httpd.shutdown()
+            httpd.server_close()
+
 
 def online_tests() -> None:
     print("\n[在线] 缓存命中时不再请求第三方")
