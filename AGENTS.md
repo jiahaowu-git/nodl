@@ -31,7 +31,7 @@
 # ① 语法与导入
 python3 -c "import nodl.cli, nodl.server, nodl.resolver, nodl.providers, nodl.douyin, nodl.tiktok, nodl.browser"
 
-# ② 自检（27 项：20 离线 + 7 在线）
+# ② 自检（40 项：31 离线 + 9 在线）
 python3 selftest.py
 #   离线部分不联网：python3 selftest.py --offline
 
@@ -42,6 +42,10 @@ ffmpeg -v error -ss 2 -i /tmp/dl/*HD*.mp4 -frames:v 1 /tmp/frame.png   # 抽帧�
 ```
 
 **交付标准：解析成功 + 文件能播 + 分辨率符合预期 + 抽帧无水印。** 只跑 `--list` 不算验证。
+
+> Windows 上把上面的 `python3` 换成 `python` 或 `py`（很多机器没有 `python3` 这个名字，
+> 见 §6.3）。另外**在线那 9 项依赖沙箱的 TLS 信任链**，偶尔会因为
+> `CERTIFICATE_VERIFY_FAILED` 抖一下 —— 重跑一次通常就好，不是代码问题。
 
 ---
 
@@ -54,18 +58,20 @@ ffmpeg -v error -ss 2 -i /tmp/dl/*HD*.mp4 -frames:v 1 /tmp/frame.png   # 抽帧�
 extract.normalise()          ← 平台判定 / 短链展开 / ID 提取 / 直链与 uri 识别
       │  Target(platform ∈ {douyin, tiktok, direct, douyin-uri})
       ▼
-resolver.Resolver.resolve()  ← 调度层：一方策略 → 公共兜底 → 报错
+resolver.Resolver.resolve()  ← 调度层：L0 缓存 → 一方策略 → 公共兜底 → 直链兜底 → 报错
       │
+      ├── cache.UriCache            ⓪ 本地 uri 缓存（零依赖，永久有效）
       ├── douyin.DouyinResolver   ① 官方 detail 接口  ② 移动分享页 SSR
       ├── tiktok.TikTokResolver   ① 页面 __UNIVERSAL_DATA_FOR_REHYDRATION__  ② oEmbed
       ├── browser.browser_detail() ③ 可选：真实 Chromium 截获签名请求
       └── providers.PROVIDERS      ④ 公共兜底：tikwm / ajaxsearch
       │
       ▼
-models.Resolved               ← 统一输出：videos[] / audios[] / images[]
+models.Resolved               ← 统一输出：videos[] / audios[] / images[] / uri
       │
       ├── cli.cmd_resolve()      → downloader.Downloader → ./downloads
-      └── server.Handler         → http://127.0.0.1:8787  +  /api/resolve  +  /api/download
+      └── server.Handler         → http://127.0.0.1:8787
+                                 + /api/resolve  + /api/download  + /api/ingest
 ```
 
 ### 模块职责表
@@ -81,9 +87,10 @@ models.Resolved               ← 统一输出：videos[] / audios[] / images[]
 | `nodl/browser.py` | 可选 Playwright 兜底 | 必选依赖 |
 | `nodl/providers.py` | 公共解析源（tikwm / ajaxsearch） | 平台字段语义 |
 | `nodl/cache.py` | uri / 直链本地缓存（韧性 L0 层） | 下载逻辑 |
-| `nodl/resolver.py` | 调度 + 播放接口 302 升级 + 去重排序 | 平台字段语义 |
+| `nodl/resolver.py` | 四层调度 + 播放接口 302 升级 + 去重排序 + 码率排序 | 平台字段语义 |
 | `nodl/downloader.py` | 流式下载、断点续传、文件名清洗 | 解析逻辑 |
-| `nodl/cli.py` / `nodl/server.py` | 两种入口 | 解析逻辑 |
+| `nodl/cli.py` / `nodl/server.py` | 两种入口（server 另含 `/api/ingest` 手动导入） | 解析逻辑 |
+| `snippets/capture.js` | 浏览器侧采集直链，POST 到 `/api/ingest` | 服务端逻辑 |
 
 ---
 
@@ -134,7 +141,7 @@ aweme.snssdk.com/aweme/v1/aweme/detail/          → 200 空 body（需 X-Gorgon
 
 ---
 
-## 4.5 韧性分层（改代码时别破坏这个顺序）
+### 4.5 韧性分层（改代码时别破坏这个顺序）
 
 `resolver.Resolver.resolve()` 的执行顺序是**有意的**，每一层都比下一层更不依赖外部：
 
@@ -153,9 +160,12 @@ L3  手动导入        零依赖，永远可用   ← server.py /api/ingest + s
 
 - `cache.py` 的 `put()` 存的是 **uri**（永久），`put_url()` 存的是 **CDN 直链**（会过期）
 - `_from_cache()` 必须在 L1/L2 **之前**执行，否则缓存白存
-- `_from_last_urls()` 是最后一道（CDN 签名过期后就失效了，只在几小时内有用）
-- 新增 provider 时，**在 `_upgrade_play_urls()` 之前**把 uri 抓下来（升级 302 会丢掉 `video_id=`）
+- `_from_last_urls()` 是最后一道（CDN 签名过期后就失效了，只在几小时内有用，默认 6 小时）
+- 新增 provider 时，**在 `_upgrade_play_urls()` 之前**把 uri 抓下来（升级 302 会丢掉 `video_id=`）；
+  `_upgrade_play_urls()` 自己会在跟 302 **之前**把 uri 回填到 `res.uri`，
+  但 provider 内部先抓一次更保险（那里拿到的才是原始播放地址）
 - `Resolved.uri` 字段是第一方解析器回填 uri 的载体
+- 缓存文件位置 `~/.nodl/uri_cache.json`，可用环境变量 `NODL_HOME` 改（见 `cache.py`）
 
 ---
 
@@ -236,6 +246,9 @@ find . -name __pycache__ -type d -exec rm -rf {} +
 | `v*.tokcdn.com/..._original.mp4?dl=1` | 无水印原片 |
 | `aweme.snssdk.com/aweme/v1/play/` | 302 跳转接口，不是文件本身 |
 | `dl.snapcdn.app/get?token=` | 代理回源，不是 302 |
+| 缓存里的 `uri` | **永久**，只是内容标识，不是文件 |
+| 缓存里的 `urls` | **会过期**（CDN 签名几小时就失效），只是兜底 |
+| `MP4 HD` 标签 | 由 `br=` 码率参数或跟完 302 推断，**不是**接口保证的分辨率 |
 
 ### 6.5 命名
 
@@ -260,7 +273,7 @@ find . -name __pycache__ -type d -exec rm -rf {} +
 
 提交前必须全部满足：
 
-- [ ] `python3 selftest.py` 全绿（当前 34/34）
+- [ ] `python3 selftest.py` 全绿（当前 40/40：31 离线 + 9 在线）
 - [ ] 真实链接跑通**下载**（不是只 `--list`）
 - [ ] `ffprobe` 确认分辨率 / 编码符合预期
 - [ ] 抽帧目视确认**无水印**
@@ -294,7 +307,11 @@ find . -name __pycache__ -type d -exec rm -rf {} +
 ## 11. 当前版本状态
 
 - 版本：`1.2.0`（`nodl/__init__.py`）
-- 自检：34/34（含 uri 缓存、缓存命中、手动导入）
+- 自检：**40/40**（31 离线 + 9 在线）
+  - 离线覆盖：链接归一化、TikTok / 抖音 JSON 夹具解析、JWT 解码、uri 缓存读写、
+    `/api/ingest` 手动导入（本地起服务打真实 HTTP，不联网）
+  - 在线覆盖：uri 缓存命中（零第三方请求）、ajaxsearch 公共源出 HD 直链、
+    App 播放接口 302 → CDN 直链可下载
 - 已验证可解析：抖音完整链接、抖音 uri、CDN 直链、TikTok 页面 JSON（离线夹具）
 - **未在真实网络验证**：TikTok 线上解析（开发沙箱屏蔽 `tiktok.com`），
   公共源 `tikwm`（开发沙箱被 Cloudflare 拦截）

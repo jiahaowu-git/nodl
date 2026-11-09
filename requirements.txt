@@ -5,4 +5,4 @@
 #   pip install playwright
 #   playwright install chromium
 #
-# 详见 README「三种运行模式」。
+# 详见 README「四种运行模式」。

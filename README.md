@@ -25,8 +25,10 @@ python3 -m nodl resolve "https://www.douyin.com/video/7661509500746108194" -o ~/
 |---|---|
 | `README.md` | 你正在看的：原理拆解 + 使用说明（给人看） |
 | `AGENTS.md` | 架构约定、扩展指引、质量门槛（给后续维护者/AI 助手看） |
-| `selftest.py` | 27 项自检，改完代码先跑它 |
+| `selftest.py` | 40 项自检（31 离线 + 9 在线），改完代码先跑它 |
 | `check.bat` | Windows 一键环境自检 |
+| `start.bat` / `start.sh` | 一键启动本地网页版（可传端口号） |
+| `snippets/capture.js` | 浏览器捕获片段，第三方源全挂时的兜底 |
 
 ---
 
@@ -211,6 +213,7 @@ webapp["video-detail"]["itemInfo"]["itemStruct"]["video"]
 | 交互对齐 | 本地网页版：粘贴链接 → MP4 [1] / MP4 [2] / MP4 HD / MP3 四个按钮 |
 | 抗改版 | 用「递归找 key」代替硬编码 JSON 路径，平台改结构不会直接 KeyError |
 | 可审计 | 每个下载链接都带正确的 `Referer`，不走任何第三方中转 |
+| 抗失效 | 四层韧性递进（uri 缓存 → 一方接口 → 公共源 → 手动导入），见 §3.5 |
 
 ### 3.2 目录结构
 
@@ -227,12 +230,16 @@ nodl/
 │   ├── providers.py    # 公共解析源兜底（tikwm / ajaxsearch）
 │   ├── cache.py        # uri / 直链本地缓存（韧性 L0 层）
 │   ├── downloader.py   # 断点续传、进度条、文件名校验
-│   ├── resolver.py     # 平台分发 + uri/直链直通模式
+│   ├── resolver.py     # 四层调度（uri 缓存 → 一方接口 → 公共源 → 直链兜底）
 │   ├── cli.py          # 命令行
+│   ├── __main__.py     # python -m nodl 入口
 │   └── server.py       # 本地 Web 服务（http.server）
 ├── web/index.html      # 仿 TikVideo 的网页界面
 ├── snippets/capture.js # 浏览器捕获片段（DevTools Console / 书签小工具）
+├── selftest.py         # 自检脚本（离线夹具 + 在线连通性）
 ├── docs/               # 实测截图
+├── start.bat / start.sh / check.bat
+├── AGENTS.md
 └── README.md
 ```
 
@@ -326,6 +333,9 @@ python3 -m nodl resolve "<链接>" --browser
 之后同一个视频再来，**一个第三方请求都不会发**，直接走平台接口拿新链接。
 第三方全挂了，你解析过的视频**依然能下**。
 
+> 缓存目录可以用环境变量 `NODL_HOME` 改（默认 `~/.nodl`）。
+> 命中缓存时解析结果的 `strategy` 会显示 `uri-cache`，命令行加 `--json` 就能看到。
+
 #### L3：手动导入（永远可用的兜底）
 
 网页版底部有一个「🛠 手动导入直链」面板，两条路：
@@ -333,6 +343,9 @@ python3 -m nodl resolve "<链接>" --browser
 1. **手动**：浏览器 F12 → Network → 筛 `Media` 或搜 `.mp4` → 右键 Copy link address → 粘进去
 2. **自动**：把 `snippets/capture.js` 贴进 DevTools Console 执行，脚本会扫描
    `performance` 资源、视频标签、内联 JSON 三处，自动把直链 POST 到本地服务
+
+脚本走的是 `POST /api/ingest`（已开 CORS，跨源可用），服务端只负责把直链包成
+`Resolved`，不解析任何平台语义。
 
 命令行同样支持：`python3 -m nodl resolve "https://cdn.../video.mp4"`
 
@@ -387,6 +400,23 @@ python3 -m nodl resolve "<链接>" --browser
 > `https://www.douyin.com/video/7397724463833435442?source=Baiduspider-sdc`
 > —— 说明百度爬虫通道会拿到 SSR 版页面，这是搜索引擎优化用的旁路。
 
+### 4.1 v1.2.0 新增实测（2026-11-09）
+
+上一节的接口状态表是 11-06 打的；这一节是 1.2.0 加了 L0 缓存层和 L3 手动导入之后
+重新跑的记录（`python selftest.py` = **40/40**：31 离线 + 9 在线）。
+
+| 项 | 结果 |
+|---|---|
+| `selftest.py --offline` | 31/31 —— 含 uri 缓存读写落盘、`/api/ingest` 本地起服务打真实 HTTP |
+| `selftest.py`（联网） | 40/40 —— 缓存命中零第三方请求、ajaxsearch 出 HD 直链、App 播放接口可下载 |
+| uri 缓存命中 | `strategy = "uri-cache"`，解析结果里带新签名的 CDN 直链，**没发任何第三方请求** |
+| `ajaxsearch` 公共源 | 抖音链接 `7661509500746108194` → 第一条就是 `MP4 HD` 直链（不是播放接口地址）+ 独立 MP3 音轨 |
+| App 播放接口 | `uri` → 302 → `v*-cold.douyinvod.com` / `zjcdn.com` 直链，`Content-Type: video/mp4`，文件头 `ftyp` |
+| `POST /api/ingest` | 返回 `ok:true` + 视频直链 + 原标题；响应带 `Access-Control-Allow-Origin: *`；缺 `url` 返回 400；`OPTIONS` 预检返回 204 |
+
+> 在线那 9 项依赖本机 TLS 信任链，沙箱里偶尔会抖一下
+> （`CERTIFICATE_VERIFY_FAILED`），重跑一次通常就绿，不是代码问题。
+
 ---
 
 ## 五、常见问题
@@ -399,7 +429,9 @@ python3 -m nodl resolve "<链接>" --browser
 | 解析提示「需要登录态」 | 见第四节 | 换 `--source auto`（默认）自动走公共接口；或 `--cookie` / `--browser` |
 | 想要最自主可控、不依赖任何第三方 | — | `--source first-party` + `--cookie` |
 | MP3 按钮缺失 | 该作品没有独立音轨 | 平台侧通常都有音轨；实在没有可加 `--mp4` 抓视频音轨 |
-| 端口被占用 | 8787 冲突 | `./start.sh 9000` |
+| 所有源都解析失败 | 公共解析源是耗材，挂了就是挂了 | 用 L3：网页版「🛠 手动导入直链」面板，或 `snippets/capture.js` 自动捕获 |
+| 第二次解析没走网络 | 命中了本地 uri 缓存（L0） | 正常，这是设计；想强制重解析就删掉 `~/.nodl/uri_cache.json` |
+| 端口被占用 | 8787 冲突 | `./start.sh 9000`（Windows：`start.bat 9000`） |
 
 ---
 
@@ -420,7 +452,7 @@ python3 -m nodl resolve "<链接>" --browser
 
 | 文件 | 说明 |
 |---|---|
-| `docs/ui_shot.png` | 本地网页版实际运行截图：解析源选择器 + MP4 HD / MP4 无水印 / MP3 原声 三个下载按钮 |
+| `docs/ui_shot.png` | 本地网页版实际运行截图：解析源选择器 + MP4 HD / MP4 无水印 / MP3 原声 三个下载按钮 + 「🛠 手动导入直链」面板 |
 | `docs/hd_frame.png` | 解析出的 1920×1080 原片抽帧 —— 画面上没有任何抖音水印 |
 
 ---
