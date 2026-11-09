@@ -80,6 +80,7 @@ models.Resolved               ← 统一输出：videos[] / audios[] / images[]
 | `nodl/tiktok.py` | TikTok 字段语义（`playAddr` vs `downloadAddr`） | 下载逻辑 |
 | `nodl/browser.py` | 可选 Playwright 兜底 | 必选依赖 |
 | `nodl/providers.py` | 公共解析源（tikwm / ajaxsearch） | 平台字段语义 |
+| `nodl/cache.py` | uri / 直链本地缓存（韧性 L0 层） | 下载逻辑 |
 | `nodl/resolver.py` | 调度 + 播放接口 302 升级 + 去重排序 | 平台字段语义 |
 | `nodl/downloader.py` | 流式下载、断点续传、文件名清洗 | 解析逻辑 |
 | `nodl/cli.py` / `nodl/server.py` | 两种入口 | 解析逻辑 |
@@ -133,7 +134,41 @@ aweme.snssdk.com/aweme/v1/aweme/detail/          → 200 空 body（需 X-Gorgon
 
 ---
 
+## 4.5 韧性分层（改代码时别破坏这个顺序）
+
+`resolver.Resolver.resolve()` 的执行顺序是**有意的**，每一层都比下一层更不依赖外部：
+
+```
+L0  uri 缓存        零依赖，永久有效   ← nodl/cache.py
+L1  官方接口        需 Cookie/浏览器   ← douyin.py / tiktok.py / browser.py
+L2  公共解析源      依赖第三方，会失效   ← providers.py
+L3  手动导入        零依赖，永远可用   ← server.py /api/ingest + snippets/capture.js
+```
+
+**关键事实**：抖音的 `uri`（`v1e00fgi…`）是永久标识，
+`aweme.snssdk.com/aweme/v1/play/?video_id={uri}` 是平台自己的接口，能随时换出
+**全新的带签名 CDN 直链**。所以只要缓存过 `uri`，那个视频就**永远不会因为第三方挂掉而下不了**。
+
+改动时注意：
+
+- `cache.py` 的 `put()` 存的是 **uri**（永久），`put_url()` 存的是 **CDN 直链**（会过期）
+- `_from_cache()` 必须在 L1/L2 **之前**执行，否则缓存白存
+- `_from_last_urls()` 是最后一道（CDN 签名过期后就失效了，只在几小时内有用）
+- 新增 provider 时，**在 `_upgrade_play_urls()` 之前**把 uri 抓下来（升级 302 会丢掉 `video_id=`）
+- `Resolved.uri` 字段是第一方解析器回填 uri 的载体
+
+---
+
 ## 5. 扩展指引
+
+### 5.0 新增一个手动捕获来源
+
+如果要支持新的浏览器捕获方式（比如别的平台的页面结构）：
+
+- 改 `snippets/capture.js` 的收集函数（`collectFrom*`），它已经覆盖
+  `performance` 资源 / `<video>` 标签 / 内联 JSON / 页面全局变量四路
+- 收集到的地址 POST 到 `/api/ingest`（已开 CORS，跨源可用）
+- `server.py` 的 `_ingest()` 只负责包成 `Resolved`，不解析平台语义
 
 ### 5.1 新增一个公共解析源
 
@@ -225,7 +260,7 @@ find . -name __pycache__ -type d -exec rm -rf {} +
 
 提交前必须全部满足：
 
-- [ ] `python3 selftest.py` 全绿（当前 27/27）
+- [ ] `python3 selftest.py` 全绿（当前 34/34）
 - [ ] 真实链接跑通**下载**（不是只 `--list`）
 - [ ] `ffprobe` 确认分辨率 / 编码符合预期
 - [ ] 抽帧目视确认**无水印**
@@ -258,8 +293,8 @@ find . -name __pycache__ -type d -exec rm -rf {} +
 
 ## 11. 当前版本状态
 
-- 版本：`1.1.0`（`nodl/__init__.py`）
-- 自检：27/27
+- 版本：`1.2.0`（`nodl/__init__.py`）
+- 自检：34/34（含 uri 缓存、缓存命中、手动导入）
 - 已验证可解析：抖音完整链接、抖音 uri、CDN 直链、TikTok 页面 JSON（离线夹具）
 - **未在真实网络验证**：TikTok 线上解析（开发沙箱屏蔽 `tiktok.com`），
   公共源 `tikwm`（开发沙箱被 Cloudflare 拦截）

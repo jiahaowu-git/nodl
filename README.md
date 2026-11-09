@@ -225,11 +225,14 @@ nodl/
 │   ├── tiktok.py       # TikTok 解析器（__UNIVERSAL_DATA_FOR_REHYDRATION__ / oEmbed）
 │   ├── browser.py      # 可选：Playwright 借真实浏览器签名取数
 │   ├── providers.py    # 公共解析源兜底（tikwm / ajaxsearch）
+│   ├── cache.py        # uri / 直链本地缓存（韧性 L0 层）
 │   ├── downloader.py   # 断点续传、进度条、文件名校验
 │   ├── resolver.py     # 平台分发 + uri/直链直通模式
 │   ├── cli.py          # 命令行
 │   └── server.py       # 本地 Web 服务（http.server）
 ├── web/index.html      # 仿 TikVideo 的网页界面
+├── snippets/capture.js # 浏览器捕获片段（DevTools Console / 书签小工具）
+├── docs/               # 实测截图
 └── README.md
 ```
 
@@ -301,7 +304,39 @@ python3 -m nodl resolve "<链接>" --browser
 > 注意：抖音的验证码是**按 IP 信誉**触发的。机房 IP / 代理 IP 很容易被弹滑块，
 > 家用宽带成功率高得多。
 
-### 3.5 公共解析源是怎么工作的
+### 3.5 韧性设计：第三方源挂了怎么办
+
+公共解析源（`tikwm`、`ajaxsearch`）本质是**耗材**——它们随时可能改接口、上验证码、
+调整 HTML 结构，甚至直接跑路。所以 nodl 的架构是**四层递进**，越往下越不依赖外部：
+
+| 层 | 依赖 | 什么时候用 | 寿命 |
+|---|---|---|---|
+| **L0 uri 缓存** | **零** | 解析过一次的视频，之后直接命中 | **永久**（uri 永不过期） |
+| **L1 官方接口** | 你自己的 Cookie / 浏览器 | 默认第一选择 | 长期稳定 |
+| **L2 公共解析源** | 第三方站点 | L1 失败时自动兜底 | 不确定，可能随时失效 |
+| **L3 手动导入** | **零** | L2 全挂时的最终手段 | **永久** |
+
+#### L0：uri 缓存（关键设计）
+
+抖音的 `uri`（`v1e00fgi0000…`）是**永久内容标识**，永不过期；而
+`aweme.snssdk.com/aweme/v1/play/?video_id={uri}` 是**平台自己的**接口，
+随时能换出一条**全新的、带新签名**的 CDN 直链。
+
+所以 nodl 每次解析成功都会把 `uri` 存到 `~/.nodl/uri_cache.json`。
+之后同一个视频再来，**一个第三方请求都不会发**，直接走平台接口拿新链接。
+第三方全挂了，你解析过的视频**依然能下**。
+
+#### L3：手动导入（永远可用的兜底）
+
+网页版底部有一个「🛠 手动导入直链」面板，两条路：
+
+1. **手动**：浏览器 F12 → Network → 筛 `Media` 或搜 `.mp4` → 右键 Copy link address → 粘进去
+2. **自动**：把 `snippets/capture.js` 贴进 DevTools Console 执行，脚本会扫描
+   `performance` 资源、视频标签、内联 JSON 三处，自动把直链 POST 到本地服务
+
+命令行同样支持：`python3 -m nodl resolve "https://cdn.../video.mp4"`
+
+### 3.6 公共解析源是怎么工作的
 
 `providers.py` 里的 `ajaxsearch` 源做的事，正好是我们逆向 tikvideo.app 时看到的：
 
